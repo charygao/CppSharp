@@ -51,6 +51,12 @@ namespace CppSharp.Types
                 }
             }
         }
+        
+        readonly bool[] PrintTypeQualifiers = { true, false };
+        readonly bool[] PrintTypeModifiers = { true, false };
+        readonly bool[] ResolveTypedefs = { false, true };
+        readonly TypePrintScopeKind[] TypePrintScopeKinds =
+            { TypePrintScopeKind.Local, TypePrintScopeKind.Qualified };
 
         public bool FindTypeMap(Type type, out TypeMap typeMap)
         {
@@ -83,42 +89,53 @@ namespace CppSharp.Types
                 }
             }
 
-            Type desugared = type.Desugar();
-            desugared = (desugared.GetFinalPointee() ?? desugared).Desugar();
-
-            bool printExtra = desugared.IsPrimitiveType() ||
-                (desugared.GetFinalPointee() ?? desugared).Desugar().IsPrimitiveType();
+        search:
 
             var typePrinter = new CppTypePrinter(Context)
             {
                 ResolveTypeMaps = false,
-                PrintTypeQualifiers = printExtra,
-                PrintTypeModifiers = printExtra,
                 PrintLogicalNames = true
             };
 
-            typePrinter.PushContext(TypePrinterContextKind.Native);
-
-            foreach (var resolveTypeDefs in new[] { false, true })
+            foreach (var printTypeModifiers in PrintTypeModifiers)
             {
-                foreach (var typePrintScopeKind in
-                    new[] { TypePrintScopeKind.Local, TypePrintScopeKind.Qualified })
+                foreach (var printTypeQualifiers in PrintTypeQualifiers)
                 {
-                    typePrinter.ResolveTypedefs = resolveTypeDefs;
-                    typePrinter.ScopeKind = typePrintScopeKind;
-                    var typeName = type.Visit(typePrinter);
-                    if (FindTypeMap(typeName, out typeMap))
+                    foreach (var resolveTypeDefs in ResolveTypedefs)
                     {
-                        typeMap.Type = type;
-                        typeMaps[type] = typeMap;
-                        return true;
+                        foreach (var typePrintScopeKind in TypePrintScopeKinds)
+                        {
+                            typePrinter.ScopeKind = typePrintScopeKind;
+                            typePrinter.ResolveTypedefs = resolveTypeDefs;
+                            typePrinter.PrintTypeQualifiers = printTypeQualifiers;
+                            typePrinter.PrintTypeModifiers = printTypeModifiers;
+
+                            if (FindTypeMap(type.Visit(typePrinter), out typeMap))
+                            {
+                                typeMap.Type = type;
+                                typeMaps[type] = typeMap;
+                                return true;
+                            }
+                        }
                     }
                 }
             }
 
+            Type desugared = type.Desugar();
+            if (type != desugared)
+            {
+                type = desugared;
+                goto search;
+            }
+
+            if (type is PointerType)
+            {
+                type = type.GetPointee();
+                goto search;
+            }
+
             typeMap = null;
-            var typedef = type as TypedefType;
-            return typedef != null && FindTypeMap(typedef.Declaration.Type, out typeMap);
+            return false;
         }
 
         public bool FindTypeMap(Declaration declaration, out TypeMap typeMap) =>
